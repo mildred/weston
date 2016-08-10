@@ -48,6 +48,7 @@ struct launcher_logind {
 	struct weston_launcher base;
 	struct weston_compositor *compositor;
 	bool sync_drm;
+	int expect_drm_pause;
 	char *seat;
 	char *sid;
 	unsigned int vtnr;
@@ -162,6 +163,7 @@ launcher_logind_open(struct weston_launcher *launcher, const char *path, int fla
 	struct launcher_logind *wl = wl_container_of(launcher, wl, base);
 	struct stat st;
 	int fl, r, fd;
+	bool paused;
 
 	r = stat(path, &st);
 	if (r < 0)
@@ -172,9 +174,17 @@ launcher_logind_open(struct weston_launcher *launcher, const char *path, int fla
 	}
 
 	fd = launcher_logind_take_device(wl, major(st.st_rdev),
-				       minor(st.st_rdev), NULL);
+				       minor(st.st_rdev), &paused);
 	if (fd < 0)
 		return fd;
+
+	if(paused && major(st.st_rdev) == DRM_MAJOR) {
+		// We do not have DRM master here. Release the device (because it is no use
+		// in slave mode) and signal for retry.
+		if (wl->sync_drm) wl->expect_drm_pause++;
+		r = -EAGAIN;
+		goto err_close;
+	}
 
 	/* Compared to weston_launcher_open() we cannot specify the open-mode
 	 * directly. Instead, logind passes us an fd with sane default modes.
@@ -486,7 +496,7 @@ device_paused(struct launcher_logind *wl, DBusMessage *m)
 	if (!strcmp(type, "pause"))
 		launcher_logind_pause_device_complete(wl, major, minor);
 
-	if (wl->sync_drm && major == DRM_MAJOR)
+	if (wl->sync_drm && major == DRM_MAJOR && wl->expect_drm_pause-- == 0)
 		launcher_logind_set_active(wl, false);
 }
 

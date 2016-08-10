@@ -1516,8 +1516,17 @@ init_drm(struct drm_backend *b, struct udev_device *device)
 	}
 
 	filename = udev_device_get_devnode(device);
-	fd = weston_launcher_open(b->compositor->launcher, filename, O_RDWR);
-	if (fd < 0) {
+	for(int retrycount = 5; retrycount; retrycount--) {
+		fd = weston_launcher_open(b->compositor->launcher, filename, O_RDWR);
+		if (fd >= 0) break;
+
+		if (errno == EAGAIN && retrycount > 1) {
+			weston_log("%d: couldn't open %s, retry\n",
+				retrycount, udev_device_get_devnode(device));
+			usleep(500e3);
+			continue;
+		}
+
 		/* Probably permissions error */
 		weston_log("couldn't open %s, skipping\n",
 			udev_device_get_devnode(device));
